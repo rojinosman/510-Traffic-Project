@@ -1,4 +1,3 @@
-# pip install numpy pandas scikit-learn h5py tables matplotlib
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -8,55 +7,143 @@ from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 
 # --------- CONFIG ---------
-ROOT = Path("data/ca/2019")
+from pathlib import Path
+
+# Folder where this script lives: .../Supervised
+SCRIPT_DIR = Path(__file__).resolve().parent
+
+# Data directory = same folder as this script
+DATA_DIR = SCRIPT_DIR
+
+# Where processed arrays (npz / npy) will be saved
+ROOT = SCRIPT_DIR / "2021"
+
 SENSOR_SAMPLE = 200
 HORIZON_STEPS = 6  # predict 30 minutes ahead
 BINS = 3
-LAGS = [1,2,3,6,12]
-ROLL_WINDOWS = [6,12]
+LAGS = [1, 2, 3, 6, 12]
+ROLL_WINDOWS = [6, 12]
 TRAIN_FRAC, VAL_FRAC = 0.75, 0.10
 
 # Traffic signal optimization parameters
 SIGNAL_CYCLE_TIME = 120  # seconds (2 minutes)
-MIN_GREEN_TIME = 15  # minimum green phase
-MAX_GREEN_TIME = 90  # maximum green phase
+MIN_GREEN_TIME = 15      # minimum green phase
+MAX_GREEN_TIME = 90      # maximum green phase
+
+# Ensure processed-data folder exists
+ROOT.mkdir(parents=True, exist_ok=True)
+
 
 # --------- LOAD DATA ---------
 def try_load_processed(root: Path):
-    for p in [root/"flow_2019.npz", root/"flow.npz", root/"processed.npz"]:
+    """
+    Try to load already-processed flow arrays from ROOT.
+    """
+    # Look for NPZ files first
+    for p in [root / "flow_2021.npz", root / "flow.npz", root / "processed.npz"]:
         if p.exists():
+            print(f"Loading processed data from {p}")
             z = np.load(p)
-            if "flow" in z: return z["flow"]
+            if "flow" in z:
+                return z["flow"]
             if "x" in z and "y" in z:
+                # If you ever want to reconstruct from x/y, do it here
                 X = z["x"]
                 return None
-    for p in [root/"flow_2019.npy", root/"flow.npy"]:
+
+    # Fallback: NPY files
+    for p in [root / "flow_2021.npy", root / "flow.npy"]:
         if p.exists():
+            print(f"Loading processed data from {p}")
             return np.load(p)
+
     return None
+
 
 flow = try_load_processed(ROOT)
 
 if flow is None:
     import glob
-    h5_candidates = glob.glob("data/ca/*2019*.h5") + glob.glob("data/ca/*_2019.h5")
-    if not h5_candidates:
-        raise FileNotFoundError("Couldn't find processed arrays or a 2019 .h5")
-    h5_path = h5_candidates[0]
-    for key in ["df", "data", "flow", "table", "/"]:
-        try:
-            df = pd.read_hdf(h5_path, key=key)
-            if isinstance(df, pd.DataFrame) and df.shape[0] > 1000:
-                break
-        except Exception:
-            continue
-    else:
-        raise RuntimeError(f"Could not read a valid DataFrame from {h5_path}")
-    df = df.sort_index()
-    flow = df.to_numpy()
+    import h5py
 
-T, N = flow.shape
-print(f"Flow matrix shape: T={T}, N={N}")
+    # Look for your raw 2021 HDF5 file in the same folder as this script
+    h5_candidates = (
+        glob.glob(str(DATA_DIR / "*2021*.h5")) +
+        glob.glob(str(DATA_DIR / "*_2021.h5"))
+    )
+
+    if not h5_candidates:
+        raise FileNotFoundError(
+            f"Couldn't find processed arrays or a 2021 .h5 in {DATA_DIR}. "
+            f"Make sure 'ca_his_raw_2021.h5' is placed there."
+        )
+
+    h5_path = h5_candidates[0]
+    print(f"Using HDF5 file: {h5_path}")
+
+    def load_flow_from_h5(path: str):
+        # ---- Try via pandas first (any key) ----
+        try:
+            with pd.HDFStore(path, "r") as store:
+                print("Available HDF5 keys:", list(store.keys()))
+                best_df = None
+                best_shape = (0, 0)
+
+                for key in store.keys():
+                    try:
+                        obj = store[key]
+                        if isinstance(obj, pd.DataFrame):
+                            print(f"Key {key}: DataFrame shape={obj.shape}")
+                            # Pick the biggest DataFrame
+                            if obj.shape[0] > best_shape[0] and obj.shape[1] > 1:
+                                best_df = obj
+                                best_shape = obj.shape
+                    except Exception as e:
+                        print(f"   Could not read key {key}: {e}")
+
+                if best_df is not None and best_shape[0] > 1000:
+                    best_df = best_df.sort_index()
+                    return best_df.to_numpy()
+        except Exception as e:
+            print("Pandas HDFStore failed:", e)
+
+        # ---- Fallback: scan datasets with h5py ----
+        print("Falling back to raw HDF5 inspection with h5py...")
+
+        with h5py.File(path, "r") as f:
+            def iter_datasets(group, prefix=""):
+                for name, item in group.items():
+                    full_name = f"{prefix}/{name}" if prefix else f"/{name}"
+                    if isinstance(item, h5py.Dataset):
+                        yield full_name, item
+                    elif isinstance(item, h5py.Group):
+                        yield from iter_datasets(item, full_name)
+
+            best_array = None
+            best_shape = (0, 0)
+            for name, ds in iter_datasets(f):
+                try:
+                    shape = ds.shape
+                    print(f"Dataset {name}: shape={shape}, ndim={ds.ndim}")
+                    # We want a large 2D dataset (time × sensors)
+                    if ds.ndim == 2 and shape[0] > best_shape[0] and shape[1] > 1:
+                        best_array = ds[...]
+                        best_shape = shape
+                except Exception as e:
+                    print(f"   Could not read dataset {name}: {e}")
+
+            if best_array is None or best_shape[0] <= 1000:
+                raise RuntimeError(
+                    f"Could not find a suitable 2D dataset in {path}. "
+                    f"Inspect the file manually to see its structure."
+                )
+
+            return best_array
+
+    flow = load_flow_from_h5(h5_path)
+    T, N = flow.shape
+    print(f"Flow matrix shape: T={T}, N={N}")
+
 
 # Subsample sensors
 rng = np.random.default_rng(42)
