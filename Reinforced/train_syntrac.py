@@ -1,146 +1,88 @@
-from syntrac_env import SynTraCEnv
-from q_agent import QAgent
+# train_syntrac.py
+import os
 import numpy as np
-import random
+from syntrac_env import SynTraCEnv
+from q_agent import QAgent, Discretizer
 
-
-# ----------------------------------------------------------------------
-# Utility: run a single episode with a given policy
-# ----------------------------------------------------------------------
-def run_episode(env, policy_fn):
-    """
-    policy_fn: function(state) -> action
-    Returns a dict with metrics.
-    """
-    state = env.reset()
-    total_reward = 0.0
-    total_wait = 0.0
-    total_queue = 0.0
-    steps = 0
-    done = False
-
-    while not done:
-        action = policy_fn(state)
-        state, reward, done, _ = env.step(action)
-
-        rec = env.data[env.idx]  # current traffic record
-        total_wait += rec["waiting_time"]
-        total_queue += rec["queue_length"]
-        total_reward += reward
-        steps += 1
-
-    return {
-        "total_reward": total_reward,
-        "avg_reward": total_reward / steps,
-        "avg_wait": total_wait / steps,
-        "avg_queue": total_queue / steps,
-        "steps": steps,
-    }
-
-
-# ----------------------------------------------------------------------
-# Training loop for RL agent
-# ----------------------------------------------------------------------
-def train(env, agent, episodes=100):
-    episode_rewards = []
-
+def train(env, agent, episodes=50, max_steps=None, save_every=10, save_path="q_table.npz"):
     for ep in range(1, episodes + 1):
-        state = env.reset()
-        total_reward = 0.0
-        done = False
+        s = env.reset()
+        ep_return = 0.0
+        steps = 0
+        while True:
+            a = agent.act(s)
+            s_next, r, done, _ = env.step(a)
+            agent.observe(s, a, r, s_next, done)
 
-        while not done:
-            action = agent.act(state)
-            next_state, reward, done, _ = env.step(action)
-            agent.learn(state, action, reward, next_state, done)
-            state = next_state
-            total_reward += reward
+            s = s_next
+            ep_return += r
+            steps += 1
 
-        agent.decay_epsilon()
-        episode_rewards.append(total_reward)
+            if done or (max_steps is not None and steps >= max_steps):
+                break
 
-        print(
-            f"Episode {ep}/{episodes} "
-            f"- Total reward: {total_reward:.2f} "
-            f"- Epsilon: {agent.eps:.3f}"
-        )
+        agent.decay()
+        print(f"Episode {ep}/{episodes}  |  return={ep_return:8.3f}  steps={steps:5d}  epsilon={agent.epsilon:.3f}")
 
-    return episode_rewards
+        if save_every and (ep % save_every == 0):
+            agent.save(save_path)
 
+def evaluate(env, agent, episodes=3, max_steps=None):
+    # Greedy during evaluation
+    old_eps = agent.epsilon
+    agent.epsilon = 0.0
+    returns = []
+    for ep in range(1, episodes + 1):
+        s = env.reset()
+        ep_return = 0.0
+        steps = 0
+        while True:
+            a = agent.act(s)
+            s, r, done, _ = env.step(a)
+            ep_return += r
+            steps += 1
+            if done or (max_steps is not None and steps >= max_steps):
+                break
+        returns.append(ep_return)
+        print(f"[Eval] Episode {ep}: return={ep_return:.3f} steps={steps}")
+    agent.epsilon = old_eps
+    print(f"[Eval] mean return={np.mean(returns):.3f}")
 
-# ----------------------------------------------------------------------
-# Evaluation helpers
-# ----------------------------------------------------------------------
-def evaluate_agent(env, agent, episodes=5):
-    """Evaluate the trained RL agent using a greedy policy."""
-    original_eps = agent.eps
-    agent.eps = 0.0  # force greedy during evaluation
-
-    def rl_policy(state):
-        # Greedy over learned Q-values; fall back to action 0 if unseen
-        if state in agent.Q:
-            return int(np.argmax(agent.Q[state]))
-        return 0
-
-    metrics = [run_episode(env, rl_policy) for _ in range(episodes)]
-    agent.eps = original_eps
-
-    print("\n=== RL Agent Evaluation (greedy policy) ===")
-    _print_metrics(metrics)
-
-
-def evaluate_baselines(env, episodes=5):
-    """Evaluate a couple of simple non-RL baselines."""
-
-    def never_switch_policy(state):
-        # Always keep the current phase
-        return 0
-
-    def random_policy(state):
-        # Randomly choose keep/switch
-        return np.random.randint(0, 2)
-
-    baselines = {
-        "Never-switch baseline": never_switch_policy,
-        "Random baseline": random_policy,
-    }
-
-    for name, policy in baselines.items():
-        metrics = [run_episode(env, policy) for _ in range(episodes)]
-        print(f"\n=== {name} ===")
-        _print_metrics(metrics)
-
-
-def _print_metrics(metrics_list):
-    avg_reward = np.mean([m["avg_reward"] for m in metrics_list])
-    avg_wait = np.mean([m["avg_wait"] for m in metrics_list])
-    avg_queue = np.mean([m["avg_queue"] for m in metrics_list])
-    steps = np.mean([m["steps"] for m in metrics_list])
-
-    print(f"Episodes:           {len(metrics_list)}")
-    print(f"Avg steps/episode:  {steps:.1f}")
-    print(f"Avg reward/step:    {avg_reward:.3f}")
-    print(f"Avg waiting time:   {avg_wait:.3f} seconds")
-    print(f"Avg queue length:   {avg_queue:.3f} vehicles")
-
-
-# ----------------------------------------------------------------------
-# Main script
-# ----------------------------------------------------------------------
 if __name__ == "__main__":
-    # For reproducibility
-    random.seed(42)
-    np.random.seed(42)
-
-    # Create environment & agent
+    # Build env
     env = SynTraCEnv("syntrac_merged.csv")
-    agent = QAgent(actions=env.n_actions)
+
+    # Discretizer: choose bins per feature (tune if you want)
+    ranges = env.feature_ranges()
+    bins_per_feature = {
+        "signal_phase": 2,   # 0/1
+        "queue_length": 10,  # 0..80
+        "waiting_time": 8,   # 0..15
+        "throughput": 8,     # 0..10
+    }
+    disc = Discretizer(ranges, bins_per_feature)
+
+    # Agent
+    agent = QAgent(
+        action_space_n=env.action_space_n,
+        discretizer=disc,
+        alpha=0.15,
+        gamma=0.98,
+        epsilon=1.0,
+        epsilon_min=0.05,
+        epsilon_decay=0.98,
+        seed=0,
+    )
+
+    # Optional: load existing table
+    if os.path.exists("q_table.npz"):
+        try:
+            agent.load("q_table.npz")
+        except Exception as e:
+            print("Load failed, starting fresh:", e)
 
     print("\n--- Training RL Agent ---")
-    train(env, agent, episodes=200)
+    train(env, agent, episodes=50, max_steps=None, save_every=10, save_path="q_table.npz")
 
-    print("\n--- Evaluating Trained RL Agent ---")
-    evaluate_agent(env, agent, episodes=5)
-
-    print("\n--- Evaluating Baseline Controllers ---")
-    evaluate_baselines(env, episodes=5)
+    print("\n--- Evaluation (greedy) ---")
+    evaluate(env, agent, episodes=3, max_steps=None)
