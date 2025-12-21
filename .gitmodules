@@ -1,0 +1,3 @@
+[submodule "Reinforced/Reinforced/SynTraC"]
+	path = Reinforced/Reinforced/SynTraC
+	url = https://github.com/DaRL-LibSignal/SynTraC.git

@@ -1,0 +1,20 @@
+Unsupervised GA optimizer usage
+===============================
+
+1) Ensure you have a simulation entrypoint that exposes `build_sim(cycle_config)` (and optionally `run_visual`). The file is commonly named `main.py`.
+
+2) Point the optimizer at that file in one of two ways:
+   - Env var: `export TRAFFIC_SIM_MAIN="/full/path/to/your/main.py"`
+   - CLI arg: `python ga_optimizer.py --sim-path \"/full/path/to/your/main.py\"`
+
+3) Run the optimizer:
+   `python ga_optimizer.py`
+   (Defaults now run 200 generations with population 30; adjust via CLI flags.)
+
+Notes:
+- If your simulation `main.py` lives beside `ga_optimizer.py` or under this `Unsupervised` folder, it should be auto-discovered.
+- If discovery still fails, set `TRAFFIC_SIM_MAIN` explicitly. A clear ImportError will be raised if `build_sim` cannot be found.
+
+GUI visualization:
+- A simple Tkinter visualizer is provided via `run_visual` in `main.py`; it shows queue lengths and signal phases.
+- When `ga_optimizer.py` finishes, it will automatically call `run_visual` with the best config (requires a display).
