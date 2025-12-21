@@ -60,6 +60,8 @@ python Supervised/naive_bayes_lisa.py --features lisa_features.npz
 python Reinforced/q_learning_lisa.py --features lisa_features.npz
 python Unsupervised/ga_optimizer_lisa.py --features lisa_features.npz
 python NeuralNetwork/mlp_lisa.py --features lisa_features.npz
+python gui_demo.py --features "$HOME/Downloads/510-Traffic-Project-LISA-3models/510-Traffic-Project-main/lisa_features.npz"
+
 ```
 
 The comparison metric is **macro-F1 on the test split**.
