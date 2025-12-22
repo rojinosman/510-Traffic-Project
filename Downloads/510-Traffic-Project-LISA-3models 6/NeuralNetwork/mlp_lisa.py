@@ -71,7 +71,7 @@ def main() -> None:
     print(f"Hidden layers: {hidden} | Max iter: {args.max_iter} | Batch: {args.batch_size}")
     print(f"Classes: {len(labels)} | Train/Val/Test: {len(Xtr)}/{len(Xva)}/{len(Xte)}")
     print(f"Macro-F1 (test): {f1_score(yte, pred, average='macro'):.4f}")
-    print(f\"MOVE/HOLD proxy: wasted_green={rates.wasted_green_rate:.3f} | illegal_go={rates.illegal_go_rate:.3f} | throughput_factor≈{rates.throughput_factor:.3f}\")
+    print(f"MOVE/HOLD proxy: wasted_green={rates.wasted_green_rate:.3f} | illegal_go={rates.illegal_go_rate:.3f} | throughput_factor≈{rates.throughput_factor:.3f}")
     print()
     print(classification_report(yte, pred, target_names=labels, digits=3))
 

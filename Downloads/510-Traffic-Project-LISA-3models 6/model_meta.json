@@ -1,0 +1,19 @@
+{
+  "labels": [
+    "go",
+    "goForward",
+    "goLeft",
+    "stop",
+    "stopLeft",
+    "warning",
+    "warningLeft"
+  ],
+  "hidden": [
+    256,
+    128
+  ],
+  "max_iter": 80,
+  "batch": 256,
+  "seed": 0,
+  "note": "MLP trained on lisa_features.npz; GUI featurizes uploaded images with extract_features_rgb()."
+}
